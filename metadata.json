@@ -1,0 +1,5 @@
+{
+  "name": "Bingo Boda Sara & Fran",
+  "description": "Una aplicación de bingo musical para bodas. Los invitados pueden unirse a una partida, recibir un cartón de bingo con canciones de una lista de Spotify y jugar en tiempo real. Creado para la boda de Sara y Fran.",
+  "requestFramePermissions": []
+}
