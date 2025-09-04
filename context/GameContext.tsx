@@ -350,8 +350,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     showToast('Esta partida ya ha terminado.', 'error');
                     return false;
                 }
-
-                const playerExists = gameData.players.some(p => p.name === state.user?.name);
+                
+                // FIX: Firebase doesn't store empty arrays, so players can be undefined.
+                // Default to an empty array to prevent the '.some' error.
+                const currentPlayers = gameData.players || [];
+                const playerExists = currentPlayers.some(p => p.name === state.user?.name);
                 
                 if (playerExists) {
                     setState(s => ({ ...s, gameCode, currentScreen: GameScreen.GAME_BOARD }));
@@ -362,7 +365,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const card = generateBingoCard(gameData.playlist);
                 const newPlayer: Player = { name: state.user.name, card: card, markedCount: 1 };
                 
-                const updatedPlayers = [...gameData.players, newPlayer];
+                const updatedPlayers = [...currentPlayers, newPlayer];
                 await saveGame(gameCode, { ...gameData, players: updatedPlayers });
 
                 setState(s => ({ ...s, gameCode, currentScreen: GameScreen.GAME_BOARD }));
