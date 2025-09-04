@@ -60,6 +60,7 @@ export interface GameState {
     spotifyTokenExpiresAt: number | null;
     isConnectingToSpotify: boolean;
     spotifyConnectionError: string | null;
+    firebaseConnectionError: string | null;
 }
 
 export interface GameContextType extends GameState {

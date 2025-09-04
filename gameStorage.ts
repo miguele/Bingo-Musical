@@ -1,52 +1,54 @@
-import { StoredGames } from './types';
+import { ref, get, set, remove } from "firebase/database";
+import { database } from './firebaseConfig';
+import { StoredGame } from './types';
 
-// Usamos un servicio gratuito de almacenamiento JSON. 
-// La URL es única para esta aplicación para evitar colisiones.
-const STORAGE_URL = 'https://jsonbase.com/bingo-boda-sara-fran/games';
+const GAMES_REF = 'games';
 
 /**
- * Obtiene el objeto de todas las partidas desde el almacenamiento remoto.
- * @returns Una promesa que se resuelve con el objeto de partidas.
+ * Gets a specific game from Firebase Realtime Database.
+ * @param gameCode The code of the game to fetch.
+ * @returns A promise that resolves with the game data or null if not found.
  */
-export const getRemoteGames = async (): Promise<StoredGames> => {
+export const getGame = async (gameCode: string): Promise<StoredGame | null> => {
     try {
-        const response = await fetch(STORAGE_URL);
-        if (!response.ok) {
-            // Un 404 es normal si no se ha guardado ninguna partida todavía.
-            if (response.status === 404) {
-                return {};
-            }
-            throw new Error(`Error al cargar las partidas: ${response.statusText}`);
+        const gameRef = ref(database, `${GAMES_REF}/${gameCode}`);
+        const snapshot = await get(gameRef);
+        if (snapshot.exists()) {
+            return snapshot.val() as StoredGame;
         }
-        const data = await response.json();
-        // El servicio puede devolver null o una cadena vacía si el bucket está vacío.
-        return data || {};
+        return null;
     } catch (error) {
-        console.error("Fallo al obtener las partidas remotas:", error);
-        // Devolvemos un objeto vacío en caso de error para no romper la aplicación.
-        return {};
+        console.error("Firebase getGame error:", error);
+        throw new Error("No se pudo conectar con el servidor de partidas.");
     }
 };
 
 /**
- * Guarda el objeto completo de partidas en el almacenamiento remoto.
- * @param games El objeto de partidas a guardar.
+ * Saves a specific game's state to Firebase Realtime Database.
+ * @param gameCode The code of the game to save.
+ * @param gameData The full game data object.
  */
-export const saveRemoteGames = async (games: StoredGames): Promise<void> => {
+export const saveGame = async (gameCode: string, gameData: StoredGame): Promise<void> => {
     try {
-        const response = await fetch(STORAGE_URL, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(games)
-        });
-        if (!response.ok) {
-            throw new Error(`Error al guardar la partida: ${response.statusText}`);
-        }
+        const gameRef = ref(database, `${GAMES_REF}/${gameCode}`);
+        await set(gameRef, gameData);
     } catch (error) {
-        console.error("Fallo al guardar las partidas remotas:", error);
-        // Relanzamos el error para que la UI pueda notificar al usuario.
+        console.error("Firebase saveGame error:", error);
         throw new Error("No se pudo guardar el estado de la partida.");
+    }
+};
+
+
+/**
+ * Deletes a specific game from Firebase Realtime Database.
+ * @param gameCode The code of the game to delete.
+ */
+export const deleteGame = async (gameCode: string): Promise<void> => {
+    try {
+        const gameRef = ref(database, `${GAMES_REF}/${gameCode}`);
+        await remove(gameRef);
+    } catch (error) {
+        console.error("Firebase deleteGame error:", error);
+        throw new Error("No se pudo borrar la partida del servidor.");
     }
 };

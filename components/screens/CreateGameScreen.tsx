@@ -19,6 +19,7 @@ const CreateGameScreen: React.FC = () => {
         setCurrentScreen, 
         isConnectingToSpotify,
         spotifyConnectionError,
+        firebaseConnectionError,
         fetchSpotifyPlaylist,
     } = useGame();
     
@@ -51,6 +52,24 @@ const CreateGameScreen: React.FC = () => {
     };
 
     const renderContent = () => {
+        if (firebaseConnectionError) {
+             return (
+                <div className="text-center p-8">
+                    <AlertTriangleIcon className="w-16 h-16 text-red-500 mx-auto" />
+                    <h2 className="mt-4 text-2xl font-bold text-gray-800">Error de Configuración</h2>
+                    <p className="mt-2 text-gray-600">{firebaseConnectionError}</p>
+                     <p className="mt-2 text-sm text-gray-500">
+                        Edita el archivo <code>firebaseConfig.ts</code> para continuar.
+                    </p>
+                    <div className="mt-6">
+                        <Button type="button" variant="secondary" onClick={() => setCurrentScreen(GameScreen.HOME)}>
+                            Volver
+                        </Button>
+                    </div>
+                </div>
+            );
+        }
+        
         if (isConnectingToSpotify) {
             return (
                 <div className="text-center p-8">

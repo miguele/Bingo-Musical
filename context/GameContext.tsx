@@ -1,7 +1,9 @@
 import React, { createContext, useState, useCallback, useMemo, useEffect } from 'react';
-import { GameState, GameContextType, User, Player, BingoCard, GameStatus, GameScreen, BingoCell, ToastMessage } from '../types';
+import { ref, onValue, off } from "firebase/database";
+import { database, firebaseConfig } from '../firebaseConfig';
+import { GameState, GameContextType, User, Player, BingoCard, GameStatus, GameScreen, BingoCell, ToastMessage, StoredGame } from '../types';
 import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET } from '../spotifyConfig';
-import { getRemoteGames, saveRemoteGames } from '../gameStorage';
+import { getGame, saveGame, deleteGame } from '../gameStorage';
 
 
 // --- LocalStorage Persistence for Spotify Token Only ---
@@ -63,6 +65,7 @@ const initialState: GameState = {
     spotifyTokenExpiresAt: null,
     isConnectingToSpotify: true,
     spotifyConnectionError: null,
+    firebaseConnectionError: null,
 };
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -74,6 +77,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, []);
 
     // --- Effects ---
+
+    useEffect(() => {
+        if (firebaseConfig.apiKey.includes('placeholder')) {
+            const errorMessage = "Configuración de Firebase no válida. Reemplaza los valores en firebaseConfig.ts con tus credenciales reales.";
+            setState(s => ({...s, firebaseConnectionError: errorMessage}));
+            showToast(errorMessage, 'error');
+        }
+    }, [showToast]);
 
     const refreshSpotifyToken = useCallback(async () => {
         try {
@@ -140,28 +151,46 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         initialConnect();
     }, [refreshSpotifyToken, showToast]);
 
-    // DJ dashboard polling to get live player progress
+    // Real-time listener for game updates from Firebase
     useEffect(() => {
-        if (state.user?.role === 'DJ' && state.currentScreen === GameScreen.DJ_DASHBOARD && state.gameCode) {
-            const intervalId = setInterval(async () => {
-                const games = await getRemoteGames();
-                const gameData = games[state.gameCode!];
-                if (gameData) {
-                    if (JSON.stringify(gameData.players) !== JSON.stringify(state.players)) {
-                        setState(s => ({ ...s, players: gameData.players }));
-                    }
-                    if (gameData.gameStatus === GameStatus.FINISHED && state.gameStatus !== GameStatus.FINISHED) {
-                        const winner = gameData.players.find(p => p.markedCount === 25);
-                        if(winner) {
-                           setState(s => ({ ...s, winner, gameStatus: GameStatus.FINISHED, players: gameData.players }));
-                        }
-                    }
-                }
-            }, 2000);
+        if (!state.gameCode || state.firebaseConnectionError) return;
 
-            return () => clearInterval(intervalId);
-        }
-    }, [state.user?.role, state.currentScreen, state.gameCode, state.players, state.gameStatus]);
+        const gameRef = ref(database, `games/${state.gameCode}`);
+        const unsubscribe = onValue(gameRef, (snapshot) => {
+            if (snapshot.exists()) {
+                const gameData = snapshot.val() as StoredGame;
+                setState(s => ({
+                    ...s,
+                    players: gameData.players || [],
+                    gameStatus: gameData.gameStatus,
+                    playlist: gameData.playlist || s.playlist 
+                }));
+
+                if (gameData.gameStatus === GameStatus.FINISHED && !state.winner) {
+                    const winner = gameData.players.find(p => p.markedCount === 25);
+                     if(winner) {
+                        setState(s => ({ ...s, winner }));
+                     }
+                }
+            } else {
+                if (state.user?.role === 'Player') {
+                    showToast('La partida ha sido terminada por el DJ.', 'info');
+                    setState(s => ({
+                        ...initialState,
+                        user: s.user,
+                        currentScreen: GameScreen.HOME,
+                        spotifyAccessToken: s.spotifyAccessToken,
+                        spotifyTokenExpiresAt: s.spotifyTokenExpiresAt,
+                        isConnectingToSpotify: s.isConnectingToSpotify,
+                        spotifyConnectionError: s.spotifyConnectionError,
+                    }));
+                }
+            }
+        });
+        
+        return () => off(gameRef, 'value', unsubscribe);
+    }, [state.gameCode, state.user?.role, showToast, state.winner, state.firebaseConnectionError]);
+
 
     // --- Context Methods ---
     
@@ -224,9 +253,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const logout = useCallback(async () => {
         if (state.user?.role === 'DJ' && state.gameCode) {
-            const games = await getRemoteGames();
-            delete games[state.gameCode];
-            await saveRemoteGames(games);
+            try {
+                await deleteGame(state.gameCode);
+            } catch (error: any) {
+                showToast(error.message || 'Error al borrar la partida del servidor.', 'error');
+            }
         }
         setState(s => ({ 
             ...initialState, 
@@ -235,13 +266,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             isConnectingToSpotify: s.isConnectingToSpotify,
             spotifyConnectionError: s.spotifyConnectionError,
         }));
-    }, [state.user, state.gameCode]);
+    }, [state.user, state.gameCode, showToast]);
 
     const resetGame = useCallback(async () => {
-        if (state.gameCode) {
-            const games = await getRemoteGames();
-            delete games[state.gameCode];
-            await saveRemoteGames(games);
+        if (state.gameCode && state.user?.role === 'DJ') {
+            try {
+                await deleteGame(state.gameCode);
+            } catch (error: any) {
+                showToast(error.message || 'Error al borrar la partida del servidor.', 'error');
+            }
         }
         
         setState(s => ({
@@ -253,87 +286,84 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             isConnectingToSpotify: s.isConnectingToSpotify,
             spotifyConnectionError: s.spotifyConnectionError,
         }));
-    }, [state.gameCode]);
+    }, [state.gameCode, state.user?.role, showToast]);
 
     const setCurrentScreen = useCallback((screen: GameScreen) => {
         setState(s => ({ ...s, currentScreen: screen }));
     }, []);
 
     const createGame = useCallback(async (songs: string[]) => {
-        const games = await getRemoteGames();
-        let gameCode;
-        do {
-            gameCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-        } while (games[gameCode]);
-
-        games[gameCode] = {
-            playlist: songs,
-            players: [],
-            gameStatus: GameStatus.IN_PROGRESS
-        };
-        await saveRemoteGames(games);
-
-        setState(s => ({
-            ...s,
-            gameCode,
-            playlist: songs,
-            gameStatus: GameStatus.IN_PROGRESS,
-            currentScreen: GameScreen.DJ_DASHBOARD,
-            players: []
-        }));
-        showToast(`Partida creada con el código: ${gameCode}`, 'success');
-    }, [showToast]);
-
-    const joinGame = useCallback(async (code: string): Promise<boolean> => {
-        const games = await getRemoteGames();
-        const gameCode = code.toUpperCase();
-        const gameData = games[gameCode];
-
-        if (gameData && state.user) {
-            if (gameData.gameStatus === GameStatus.FINISHED) {
-                showToast('Esta partida ya ha terminado.', 'error');
-                return false;
+        if (state.firebaseConnectionError) {
+             showToast("No se puede crear la partida. Revisa la configuración de Firebase.", 'error');
+             return;
+        }
+        try {
+            let gameCode = '';
+            let gameExists = true;
+            while(gameExists) {
+                gameCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+                const existingGame = await getGame(gameCode);
+                gameExists = !!existingGame;
             }
 
-            const playerExists = gameData.players.some(p => p.name === state.user?.name);
-            
-            if (playerExists) {
-                setState(s => ({
-                    ...s,
-                    gameCode,
-                    playlist: gameData.playlist,
-                    players: gameData.players,
-                    gameStatus: gameData.gameStatus,
-                    currentScreen: GameScreen.GAME_BOARD,
-                }));
-                showToast(`Bienvenido de vuelta, ${state.user.name}.`, 'info');
-                return true;
-            }
-
-            const card = generateBingoCard(gameData.playlist);
-            const newPlayer: Player = {
-                name: state.user.name,
-                card: card,
-                markedCount: 1 
+            const newGame: StoredGame = {
+                playlist: songs,
+                players: [],
+                gameStatus: GameStatus.IN_PROGRESS
             };
-            
-            gameData.players.push(newPlayer);
-            await saveRemoteGames(games);
+            await saveGame(gameCode, newGame);
 
             setState(s => ({
                 ...s,
                 gameCode,
-                playlist: gameData.playlist,
-                players: gameData.players,
-                gameStatus: gameData.gameStatus,
-                currentScreen: GameScreen.GAME_BOARD
+                currentScreen: GameScreen.DJ_DASHBOARD,
             }));
-            showToast(`${newPlayer.name} se ha unido a la partida.`, 'info');
-            return true;
+            showToast(`Partida creada con el código: ${gameCode}`, 'success');
+        } catch (error: any) {
+            showToast(error.message || 'No se pudo crear la partida. Revisa tu conexión.', 'error');
         }
-        showToast('Código de partida no encontrado.', 'error');
-        return false;
-    }, [state.user, showToast]);
+    }, [showToast, state.firebaseConnectionError]);
+
+    const joinGame = useCallback(async (code: string): Promise<boolean> => {
+        if (state.firebaseConnectionError) {
+            showToast("No se puede unir a la partida. Revisa la configuración de Firebase.", 'error');
+            return false;
+        }
+        try {
+            const gameCode = code.toUpperCase();
+            const gameData = await getGame(gameCode);
+
+            if (gameData && state.user) {
+                if (gameData.gameStatus === GameStatus.FINISHED) {
+                    showToast('Esta partida ya ha terminado.', 'error');
+                    return false;
+                }
+
+                const playerExists = gameData.players.some(p => p.name === state.user?.name);
+                
+                if (playerExists) {
+                    setState(s => ({ ...s, gameCode, currentScreen: GameScreen.GAME_BOARD }));
+                    showToast(`Bienvenido de vuelta, ${state.user.name}.`, 'info');
+                    return true;
+                }
+
+                const card = generateBingoCard(gameData.playlist);
+                const newPlayer: Player = { name: state.user.name, card: card, markedCount: 1 };
+                
+                const updatedPlayers = [...gameData.players, newPlayer];
+                await saveGame(gameCode, { ...gameData, players: updatedPlayers });
+
+                setState(s => ({ ...s, gameCode, currentScreen: GameScreen.GAME_BOARD }));
+                showToast(`${newPlayer.name} se ha unido a la partida.`, 'info');
+                return true;
+            }
+            showToast('Código de partida no encontrado.', 'error');
+            return false;
+        } catch (error: any) {
+            showToast(error.message || 'Error al unirse a la partida. Revisa tu conexión.', 'error');
+            return false;
+        }
+    }, [state.user, showToast, state.firebaseConnectionError]);
 
     const markCell = useCallback(async (rowIndex: number, colIndex: number) => {
         if (!state.user || !state.gameCode) return;
@@ -341,11 +371,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const player = state.players.find(p => p.name === state.user?.name);
         if (!player || player.card[rowIndex][colIndex].marked) return;
 
-        // 1. Optimistic UI Update
-        const playerIndex = state.players.findIndex(p => p.name === state.user?.name);
-        const newPlayers = JSON.parse(JSON.stringify(state.players));
-        const updatedPlayer = newPlayers[playerIndex];
+        const originalPlayers = state.players;
 
+        // 1. Optimistic UI Update
+        const newPlayers = JSON.parse(JSON.stringify(state.players));
+        const playerIndex = newPlayers.findIndex((p: Player) => p.name === state.user?.name);
+        if(playerIndex === -1) return;
+        
+        const updatedPlayer = newPlayers[playerIndex];
         updatedPlayer.card[rowIndex][colIndex].marked = true;
         let markedCount = 0;
         updatedPlayer.card.forEach((row: BingoCell[]) => row.forEach((cell: BingoCell) => {
@@ -355,15 +388,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         setState(s => ({ ...s, players: newPlayers }));
 
-        // 2. Save state to remote
+        // 2. Save state to Firebase
         try {
-            const games = await getRemoteGames();
-            const gameData = games[state.gameCode];
+            const gameData = await getGame(state.gameCode);
             if (!gameData) throw new Error("La partida ya no existe en el servidor.");
 
             const storedPlayerIndex = gameData.players.findIndex(p => p.name === state.user?.name);
             if (storedPlayerIndex === -1) throw new Error("No se encontró tu jugador en la partida.");
-
+            
             gameData.players[storedPlayerIndex] = updatedPlayer;
             
             const isWinner = markedCount === 25;
@@ -371,19 +403,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 gameData.gameStatus = GameStatus.FINISHED;
             }
 
-            await saveRemoteGames(games);
+            await saveGame(state.gameCode, gameData);
 
             if (isWinner) {
-                showToast('¡BINGO! Has ganado la partida.', 'success');
-                setState(s => ({ ...s, winner: updatedPlayer, gameStatus: GameStatus.FINISHED }));
+                 showToast('¡BINGO! Has ganado la partida.', 'success');
             }
 
         } catch (error: any) {
             console.error("Failed to save mark:", error);
-            showToast("Error al guardar tu jugada. Se deshará el cambio.", 'error');
-            
-            // Revert the optimistic UI update on failure
-            setState(s => ({ ...s, players: s.players }));
+            showToast(error.message || "Error al guardar tu jugada. Se deshará el cambio.", 'error');
+            setState(s => ({ ...s, players: originalPlayers }));
         }
     }, [showToast, state.gameCode, state.players, state.user]);
 
