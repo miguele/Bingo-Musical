@@ -1,40 +1,25 @@
 import React, { createContext, useState, useCallback, useMemo, useEffect } from 'react';
 import { GameState, GameContextType, User, Player, BingoCard, GameStatus, GameScreen, BingoCell, ToastMessage } from '../types';
 import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET } from '../spotifyConfig';
+import { getRemoteGames, saveRemoteGames } from '../gameStorage';
 
-// --- LocalStorage Persistence ---
 
-const BINGO_GAMES_STORAGE_KEY = 'bingoGames';
+// --- LocalStorage Persistence for Spotify Token Only ---
 const SPOTIFY_TOKEN_STORAGE_KEY = 'spotifyAuthToken';
 const SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY = 'spotifyAuthTokenExpiry';
 
-type StoredGame = {
-    playlist: string[];
-    players: Player[];
-    gameStatus: GameStatus;
-};
-
-type StoredGames = {
-    [gameCode: string]: StoredGame;
-};
-
-const getStoredGames = (): StoredGames => {
+// --- Spotify API Helper ---
+const extractPlaylistId = (url: string): string | null => {
     try {
-        const games = localStorage.getItem(BINGO_GAMES_STORAGE_KEY);
-        return games ? JSON.parse(games) : {};
-    } catch (error) {
-        console.error("Error reading games from localStorage", error);
-        return {};
+        const urlObj = new URL(url);
+        if (urlObj.hostname !== 'open.spotify.com') return null;
+        const pathMatch = urlObj.pathname.match(/\/playlist\/([a-zA-Z0-9]+)/);
+        return pathMatch ? pathMatch[1] : null;
+    } catch {
+        return null;
     }
 };
 
-const saveStoredGames = (games: StoredGames) => {
-    try {
-        localStorage.setItem(BINGO_GAMES_STORAGE_KEY, JSON.stringify(games));
-    } catch (error) {
-        console.error("Error saving games to localStorage", error);
-    }
-};
 
 // --- Game Logic ---
 
@@ -90,12 +75,53 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // --- Effects ---
 
-    // Automatic Spotify connection using Client Credentials Flow
+    const refreshSpotifyToken = useCallback(async () => {
+        try {
+            const response = await fetch('https://accounts.spotify.com/api/token', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': 'Basic ' + btoa(SPOTIFY_CLIENT_ID + ':' + SPOTIFY_CLIENT_SECRET)
+                },
+                body: 'grant_type=client_credentials'
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error_description || 'Fallo al autenticar con Spotify.');
+            }
+
+            const data = await response.json();
+            const expiresAt = Date.now() + data.expires_in * 1000;
+            
+            localStorage.setItem(SPOTIFY_TOKEN_STORAGE_KEY, data.access_token);
+            localStorage.setItem(SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY, expiresAt.toString());
+
+            setState(s => ({
+                ...s,
+                spotifyAccessToken: data.access_token,
+                spotifyTokenExpiresAt: expiresAt,
+                isConnectingToSpotify: false,
+            }));
+            return data.access_token;
+        } catch (error: any) {
+            console.error("Spotify Client Credentials Error:", error);
+            const errorMessage = error.message || 'Error de conexión automática con Spotify.';
+            setState(s => ({
+                ...s,
+                isConnectingToSpotify: false,
+                spotifyConnectionError: errorMessage
+            }));
+            showToast(errorMessage, 'error');
+            return null;
+        }
+    }, [showToast]);
+
     useEffect(() => {
-        const connectToSpotify = async () => {
-            // Check for existing valid token first
+        const initialConnect = async () => {
             const persistedToken = localStorage.getItem(SPOTIFY_TOKEN_STORAGE_KEY);
             const persistedExpiry = localStorage.getItem(SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY);
+            
             if (persistedToken && persistedExpiry && Date.now() < parseInt(persistedExpiry, 10)) {
                 setState(s => ({ 
                     ...s, 
@@ -103,67 +129,27 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     spotifyTokenExpiresAt: parseInt(persistedExpiry, 10),
                     isConnectingToSpotify: false 
                 }));
-                return;
-            }
-
-            setState(s => ({ ...s, isConnectingToSpotify: true, spotifyConnectionError: null }));
-
-            try {
-                const response = await fetch('https://accounts.spotify.com/api/token', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Authorization': 'Basic ' + btoa(SPOTIFY_CLIENT_ID + ':' + SPOTIFY_CLIENT_SECRET)
-                    },
-                    body: 'grant_type=client_credentials'
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error_description || 'Fallo al autenticar con Spotify.');
+            } else {
+                 setState(s => ({ ...s, isConnectingToSpotify: true, spotifyConnectionError: null }));
+                const token = await refreshSpotifyToken();
+                if (token) {
+                    showToast('Conectado a Spotify automáticamente.', 'success');
                 }
-
-                const data = await response.json();
-                const expiresAt = Date.now() + data.expires_in * 1000;
-                
-                localStorage.setItem(SPOTIFY_TOKEN_STORAGE_KEY, data.access_token);
-                localStorage.setItem(SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY, expiresAt.toString());
-
-                setState(s => ({
-                    ...s,
-                    spotifyAccessToken: data.access_token,
-                    spotifyTokenExpiresAt: expiresAt,
-                    isConnectingToSpotify: false,
-                }));
-                 showToast('Conectado a Spotify automáticamente.', 'success');
-
-            } catch (error: any) {
-                console.error("Spotify Client Credentials Error:", error);
-                const errorMessage = error.message || 'Error de conexión automática con Spotify.';
-                setState(s => ({
-                    ...s,
-                    isConnectingToSpotify: false,
-                    spotifyConnectionError: errorMessage
-                }));
-                showToast(errorMessage, 'error');
             }
         };
-
-        connectToSpotify();
-    }, [showToast]);
+        initialConnect();
+    }, [refreshSpotifyToken, showToast]);
 
     // DJ dashboard polling to get live player progress
     useEffect(() => {
         if (state.user?.role === 'DJ' && state.currentScreen === GameScreen.DJ_DASHBOARD && state.gameCode) {
-            const intervalId = setInterval(() => {
-                const games = getStoredGames();
+            const intervalId = setInterval(async () => {
+                const games = await getRemoteGames();
                 const gameData = games[state.gameCode!];
                 if (gameData) {
-                    // Sync player list if it has changed
                     if (JSON.stringify(gameData.players) !== JSON.stringify(state.players)) {
                         setState(s => ({ ...s, players: gameData.players }));
                     }
-                    // Check if a player has won
                     if (gameData.gameStatus === GameStatus.FINISHED && state.gameStatus !== GameStatus.FINISHED) {
                         const winner = gameData.players.find(p => p.markedCount === 25);
                         if(winner) {
@@ -178,34 +164,69 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, [state.user?.role, state.currentScreen, state.gameCode, state.players, state.gameStatus]);
 
     // --- Context Methods ---
+    
+    const fetchSpotifyPlaylist = useCallback(async (playlistUrl: string): Promise<string[]> => {
+        const playlistId = extractPlaylistId(playlistUrl);
+        if (!playlistId) {
+            throw new Error('La URL no parece ser una playlist de Spotify válida.');
+        }
+
+        const fetchAllTracks = async (token: string): Promise<any[]> => {
+            let tracks: any[] = [];
+            let nextUrl: string | null = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?fields=items(track(name,artists(name))),next`;
+
+            while (nextUrl) {
+                const response = await fetch(nextUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+                if (!response.ok) {
+                    if (response.status === 401) throw new Error('TOKEN_EXPIRED');
+                    if (response.status === 404) throw new Error('Playlist no encontrada. Asegúrate de que el enlace es correcto y la playlist es pública.');
+                    throw new Error('No se pudo obtener la información de la playlist.');
+                }
+                const data = await response.json();
+                tracks = tracks.concat(data.items.filter((item: any) => item.track)); 
+                nextUrl = data.next;
+            }
+            return tracks;
+        };
+
+        const formatTracks = (tracks: any[]): string[] => {
+            return tracks.map(item => 
+                `${item.track.name} - ${item.track.artists.map((a: any) => a.name).join(', ')}`
+            );
+        };
+
+        try {
+            if (!state.spotifyAccessToken) throw new Error("Aún conectando con Spotify. Inténtalo de nuevo en un momento.");
+            const tracks = await fetchAllTracks(state.spotifyAccessToken);
+            return formatTracks(tracks);
+        } catch (error: any) {
+            if (error.message === 'TOKEN_EXPIRED') {
+                showToast('El token de Spotify ha caducado. Refrescando automáticamente...', 'info');
+                const newToken = await refreshSpotifyToken();
+                if (newToken) {
+                    const tracks = await fetchAllTracks(newToken);
+                    return formatTracks(tracks);
+                } else {
+                    throw new Error("Fallo al refrescar el token de Spotify. Recarga la página.");
+                }
+            }
+            throw error; // Re-throw other errors
+        }
+    }, [state.spotifyAccessToken, refreshSpotifyToken, showToast]);
 
     const removeToast = useCallback((id: number) => {
         setState(s => ({ ...s, toasts: s.toasts.filter(toast => toast.id !== id) }));
     }, []);
     
-    const logoutFromSpotify = useCallback(() => {
-        localStorage.removeItem(SPOTIFY_TOKEN_STORAGE_KEY);
-        localStorage.removeItem(SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY);
-        setState(s => ({ 
-            ...s, 
-            spotifyAccessToken: null, 
-            spotifyTokenExpiresAt: null,
-            // Trigger reconnection on next attempt
-            isConnectingToSpotify: true, 
-            spotifyConnectionError: null 
-        }));
-        showToast('Se ha cerrado la sesión de Spotify. Recarga para reconectar.', 'info');
-    }, [showToast]);
-
     const login = useCallback((name: string, role: 'DJ' | 'Player') => {
         setState(s => ({ ...s, user: { name, role }, currentScreen: GameScreen.HOME }));
     }, []);
 
-    const logout = useCallback(() => {
+    const logout = useCallback(async () => {
         if (state.user?.role === 'DJ' && state.gameCode) {
-            const games = getStoredGames();
+            const games = await getRemoteGames();
             delete games[state.gameCode];
-            saveStoredGames(games);
+            await saveRemoteGames(games);
         }
         setState(s => ({ 
             ...initialState, 
@@ -216,11 +237,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }));
     }, [state.user, state.gameCode]);
 
-    const resetGame = useCallback(() => {
+    const resetGame = useCallback(async () => {
         if (state.gameCode) {
-            const games = getStoredGames();
+            const games = await getRemoteGames();
             delete games[state.gameCode];
-            saveStoredGames(games);
+            await saveRemoteGames(games);
         }
         
         setState(s => ({
@@ -238,8 +259,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setState(s => ({ ...s, currentScreen: screen }));
     }, []);
 
-    const createGame = useCallback((songs: string[]) => {
-        const games = getStoredGames();
+    const createGame = useCallback(async (songs: string[]) => {
+        const games = await getRemoteGames();
         let gameCode;
         do {
             gameCode = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -250,7 +271,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             players: [],
             gameStatus: GameStatus.IN_PROGRESS
         };
-        saveStoredGames(games);
+        await saveRemoteGames(games);
 
         setState(s => ({
             ...s,
@@ -263,8 +284,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         showToast(`Partida creada con el código: ${gameCode}`, 'success');
     }, [showToast]);
 
-    const joinGame = useCallback((code: string): boolean => {
-        const games = getStoredGames();
+    const joinGame = useCallback(async (code: string): Promise<boolean> => {
+        const games = await getRemoteGames();
         const gameCode = code.toUpperCase();
         const gameData = games[gameCode];
 
@@ -297,7 +318,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
             
             gameData.players.push(newPlayer);
-            saveStoredGames(games);
+            await saveRemoteGames(games);
 
             setState(s => ({
                 ...s,
@@ -310,58 +331,61 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             showToast(`${newPlayer.name} se ha unido a la partida.`, 'info');
             return true;
         }
+        showToast('Código de partida no encontrado.', 'error');
         return false;
     }, [state.user, showToast]);
 
-    const markCell = useCallback((rowIndex: number, colIndex: number) => {
+    const markCell = useCallback(async (rowIndex: number, colIndex: number) => {
         if (!state.user || !state.gameCode) return;
+        
+        const player = state.players.find(p => p.name === state.user?.name);
+        if (!player || player.card[rowIndex][colIndex].marked) return;
 
-        setState(s => {
-            if (!s.gameCode) return s;
+        // 1. Optimistic UI Update
+        const playerIndex = state.players.findIndex(p => p.name === state.user?.name);
+        const newPlayers = JSON.parse(JSON.stringify(state.players));
+        const updatedPlayer = newPlayers[playerIndex];
 
-            const playerIndex = s.players.findIndex(p => p.name === s.user?.name);
-            if (playerIndex === -1) return s;
+        updatedPlayer.card[rowIndex][colIndex].marked = true;
+        let markedCount = 0;
+        updatedPlayer.card.forEach((row: BingoCell[]) => row.forEach((cell: BingoCell) => {
+            if (cell.marked) markedCount++;
+        }));
+        updatedPlayer.markedCount = markedCount;
 
-            const newPlayers = JSON.parse(JSON.stringify(s.players));
-            const player = newPlayers[playerIndex];
+        setState(s => ({ ...s, players: newPlayers }));
+
+        // 2. Save state to remote
+        try {
+            const games = await getRemoteGames();
+            const gameData = games[state.gameCode];
+            if (!gameData) throw new Error("La partida ya no existe en el servidor.");
+
+            const storedPlayerIndex = gameData.players.findIndex(p => p.name === state.user?.name);
+            if (storedPlayerIndex === -1) throw new Error("No se encontró tu jugador en la partida.");
+
+            gameData.players[storedPlayerIndex] = updatedPlayer;
             
-            if (player.card[rowIndex][colIndex].marked) {
-                return s; 
+            const isWinner = markedCount === 25;
+            if (isWinner) {
+                gameData.gameStatus = GameStatus.FINISHED;
             }
-            
-            player.card[rowIndex][colIndex].marked = true;
 
-            let markedCount = 0;
-            player.card.forEach((row: BingoCell[]) => row.forEach((cell: BingoCell) => {
-                if (cell.marked) markedCount++;
-            }));
-            player.markedCount = markedCount;
-            
-            const games = getStoredGames();
-            const gameData = games[s.gameCode];
-            let isWinner = false;
-
-            if (gameData) {
-                const storedPlayerIndex = gameData.players.findIndex(p => p.name === s.user?.name);
-                if (storedPlayerIndex !== -1) {
-                    gameData.players[storedPlayerIndex] = player;
-                }
-                
-                if (markedCount === 25) {
-                    isWinner = true;
-                    gameData.gameStatus = GameStatus.FINISHED;
-                    showToast('¡BINGO! Has ganado la partida.', 'success');
-                }
-                saveStoredGames(games);
-            }
+            await saveRemoteGames(games);
 
             if (isWinner) {
-                return { ...s, players: newPlayers, winner: player, gameStatus: GameStatus.FINISHED };
+                showToast('¡BINGO! Has ganado la partida.', 'success');
+                setState(s => ({ ...s, winner: updatedPlayer, gameStatus: GameStatus.FINISHED }));
             }
 
-            return { ...s, players: newPlayers };
-        });
-    }, [showToast]);
+        } catch (error: any) {
+            console.error("Failed to save mark:", error);
+            showToast("Error al guardar tu jugada. Se deshará el cambio.", 'error');
+            
+            // Revert the optimistic UI update on failure
+            setState(s => ({ ...s, players: s.players }));
+        }
+    }, [showToast, state.gameCode, state.players, state.user]);
 
 
     const contextValue = useMemo(() => ({
@@ -375,8 +399,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resetGame,
         showToast,
         removeToast,
-        logoutFromSpotify,
-    }), [state, login, logout, setCurrentScreen, createGame, joinGame, markCell, resetGame, showToast, removeToast, logoutFromSpotify]);
+        fetchSpotifyPlaylist,
+    }), [state, login, logout, setCurrentScreen, createGame, joinGame, markCell, resetGame, showToast, removeToast, fetchSpotifyPlaylist]);
 
     return (
         <GameContext.Provider value={contextValue}>

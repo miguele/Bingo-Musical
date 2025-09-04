@@ -9,16 +9,19 @@ import AlertTriangleIcon from '../icons/AlertTriangleIcon';
 const JoinGameScreen: React.FC = () => {
     const [code, setCode] = useState('');
     const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
     const { joinGame, setCurrentScreen } = useGame();
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
         if (code.trim()) {
-            const success = joinGame(code.trim());
+            setIsLoading(true);
+            const success = await joinGame(code.trim());
             if (!success) {
                 setError('Código de partida no válido. ¡Inténtalo de nuevo!');
             }
+            setIsLoading(false);
         }
     };
 
@@ -40,6 +43,7 @@ const JoinGameScreen: React.FC = () => {
                         placeholder="CÓDIGO"
                         className="text-center tracking-[0.3em] uppercase"
                         maxLength={6}
+                        disabled={isLoading}
                     />
                     {error && (
                         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md flex items-center gap-3 text-left" role="alert">
@@ -48,11 +52,11 @@ const JoinGameScreen: React.FC = () => {
                         </div>
                     )}
                     <div className="flex flex-col sm:flex-row gap-4 pt-4">
-                        <Button type="button" variant="secondary" onClick={() => setCurrentScreen(GameScreen.HOME)}>
+                        <Button type="button" variant="secondary" onClick={() => setCurrentScreen(GameScreen.HOME)} disabled={isLoading}>
                             Volver
                         </Button>
-                        <Button type="submit" className="w-full">
-                            Entrar
+                        <Button type="submit" className="w-full" disabled={isLoading || !code.trim()}>
+                            {isLoading ? 'Entrando...' : 'Entrar'}
                         </Button>
                     </div>
                 </form>

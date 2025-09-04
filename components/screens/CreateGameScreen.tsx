@@ -8,49 +8,6 @@ import MusicNoteIcon from '../icons/MusicNoteIcon';
 import AlertTriangleIcon from '../icons/AlertTriangleIcon';
 import SpotifyIcon from '../icons/SpotifyIcon';
 
-// --- Spotify API Helper Functions ---
-const SPOTIFY_API_BASE_URL = 'https://api.spotify.com/v1';
-
-const extractPlaylistId = (url: string): string | null => {
-    try {
-        const urlObj = new URL(url);
-        if (urlObj.hostname !== 'open.spotify.com') return null;
-        const pathMatch = urlObj.pathname.match(/\/playlist\/([a-zA-Z0-9]+)/);
-        return pathMatch ? pathMatch[1] : null;
-    } catch {
-        return null;
-    }
-};
-
-const fetchAllTracks = async (playlistId: string, token: string): Promise<any[]> => {
-    let tracks: any[] = [];
-    let nextUrl: string | null = `${SPOTIFY_API_BASE_URL}/playlists/${playlistId}/tracks?fields=items(track(name,artists(name))),next`;
-
-    while (nextUrl) {
-        const response = await fetch(nextUrl, {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        });
-
-        if (!response.ok) {
-             if (response.status === 401) {
-                throw new Error('El token de Spotify no es válido o ha expirado. Por favor, recarga la página para obtener uno nuevo.');
-            }
-            if (response.status === 404) {
-                throw new Error('Playlist no encontrada. Asegúrate de que el enlace es correcto y la playlist es pública.');
-            }
-            throw new Error('No se pudo obtener la información de la playlist.');
-        }
-
-        const data = await response.json();
-        tracks = tracks.concat(data.items.filter((item: any) => item.track)); 
-        nextUrl = data.next;
-    }
-    return tracks;
-};
-
-
 // --- Main Screen Component ---
 const CreateGameScreen: React.FC = () => {
     const [playlistUrl, setPlaylistUrl] = useState('');
@@ -60,34 +17,18 @@ const CreateGameScreen: React.FC = () => {
     const { 
         createGame, 
         setCurrentScreen, 
-        spotifyAccessToken,
         isConnectingToSpotify,
         spotifyConnectionError,
-        logoutFromSpotify,
+        fetchSpotifyPlaylist,
     } = useGame();
     
     const handleLoadPlaylist = async () => {
         setError('');
         setLoadedSongs([]);
-
-        if (!spotifyAccessToken) {
-            setError('No se pudo conectar con Spotify. Intenta recargar la página.');
-            return;
-        }
-        
-        const playlistId = extractPlaylistId(playlistUrl);
-        if (!playlistId) {
-            setError('La URL no parece ser una playlist de Spotify válida.');
-            return;
-        }
-
         setIsLoading(true);
 
         try {
-            const tracks = await fetchAllTracks(playlistId, spotifyAccessToken);
-            const formattedSongs = tracks.map(item => 
-                `${item.track.name} - ${item.track.artists.map((a: any) => a.name).join(', ')}`
-            );
+            const formattedSongs = await fetchSpotifyPlaylist(playlistUrl);
             
             if (formattedSongs.length < 24) {
                  setError(`Se necesitan al menos 24 canciones para generar los cartones. Esta playlist solo tiene ${formattedSongs.length}.`);
@@ -95,12 +36,8 @@ const CreateGameScreen: React.FC = () => {
             } else {
                 setLoadedSongs(formattedSongs);
             }
-
         } catch (e: any) {
              setError(e.message || 'Ocurrió un error desconocido al cargar la playlist.');
-             if (e.message.includes('token')) {
-                 logoutFromSpotify();
-             }
         } finally {
             setIsLoading(false);
         }
@@ -139,21 +76,6 @@ const CreateGameScreen: React.FC = () => {
                     </div>
                 </div>
             );
-        }
-
-        if (!spotifyAccessToken) {
-             return (
-                 <div className="text-center p-8">
-                    <AlertTriangleIcon className="w-16 h-16 text-red-500 mx-auto" />
-                    <h2 className="mt-4 text-2xl font-bold text-gray-800">No se pudo conectar</h2>
-                     <p className="mt-2 text-gray-600">No se ha podido obtener el token de Spotify. Por favor, recarga la página.</p>
-                     <div className="mt-6">
-                        <Button type="button" variant="secondary" onClick={() => setCurrentScreen(GameScreen.HOME)}>
-                            Volver
-                        </Button>
-                    </div>
-                </div>
-             )
         }
 
         return (

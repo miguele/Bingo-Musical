@@ -37,6 +37,16 @@ export interface ToastMessage {
     type: 'success' | 'info' | 'error';
 }
 
+export interface StoredGame {
+    playlist: string[];
+    players: Player[];
+    gameStatus: GameStatus;
+};
+
+export type StoredGames = {
+    [gameCode: string]: StoredGame;
+};
+
 export interface GameState {
     user: User | null;
     currentScreen: GameScreen;
@@ -54,13 +64,13 @@ export interface GameState {
 
 export interface GameContextType extends GameState {
     login: (name: string, role: 'DJ' | 'Player') => void;
-    logout: () => void;
+    logout: () => Promise<void>;
     setCurrentScreen: (screen: GameScreen) => void;
-    createGame: (songs: string[]) => void;
-    joinGame: (code: string) => boolean;
-    markCell: (rowIndex: number, colIndex: number) => void;
-    resetGame: () => void;
+    createGame: (songs: string[]) => Promise<void>;
+    joinGame: (code: string) => Promise<boolean>;
+    markCell: (rowIndex: number, colIndex: number) => Promise<void>;
+    resetGame: () => Promise<void>;
     showToast: (message: string, type?: ToastMessage['type']) => void;
     removeToast: (id: number) => void;
-    logoutFromSpotify: () => void;
+    fetchSpotifyPlaylist: (playlistUrl: string) => Promise<string[]>;
 }
