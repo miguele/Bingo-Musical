@@ -32,6 +32,12 @@ export enum GameScreen {
     DJ_DASHBOARD = 'DJ_DASHBOARD'
 }
 
+export interface ToastMessage {
+    id: number;
+    message: string;
+    type: 'success' | 'info' | 'error';
+}
+
 export interface GameState {
     user: User | null;
     currentScreen: GameScreen;
@@ -40,14 +46,17 @@ export interface GameState {
     players: Player[];
     gameStatus: GameStatus;
     winner: Player | null;
+    toasts: ToastMessage[];
 }
 
 export interface GameContextType extends GameState {
     login: (name: string, role: 'DJ' | 'Player') => void;
     logout: () => void;
     setCurrentScreen: (screen: GameScreen) => void;
-    createGame: (playlistUrl: string) => void;
+    createGame: (songs: string[]) => void;
     joinGame: (code: string) => boolean;
     markCell: (rowIndex: number, colIndex: number) => void;
     resetGame: () => void;
+    showToast: (message: string, type?: ToastMessage['type']) => void;
+    removeToast: (id: number) => void;
 }

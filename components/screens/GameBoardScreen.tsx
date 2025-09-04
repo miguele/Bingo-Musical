@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { useGame } from '../../hooks/useGame';
 import StarIcon from '../icons/StarIcon';
@@ -39,7 +38,7 @@ const GameBoardScreen: React.FC = () => {
                                 flex justify-center items-center text-center p-1
                                 rounded-md transition-all duration-300 ease-in-out transform
                                 ${cell.marked 
-                                    ? 'bg-blue-500 text-white shadow-inner scale-95' 
+                                    ? 'bg-gradient-to-br from-blue-400 to-indigo-500 text-white shadow-lg scale-95' 
                                     : 'bg-white/80 hover:bg-blue-100 cursor-pointer'}
                             `}
                         >

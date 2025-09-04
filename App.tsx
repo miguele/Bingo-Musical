@@ -10,6 +10,7 @@ import DJDashboardScreen from './components/screens/DJDashboardScreen';
 import WinnerScreen from './components/screens/WinnerScreen';
 import Header from './components/Header';
 import { GameScreen } from './types';
+import ToastContainer from './components/toast/ToastContainer';
 
 
 const App: React.FC = () => {
@@ -41,6 +42,7 @@ const App: React.FC = () => {
 
     return (
         <div className="bg-gradient-to-br from-[#fdf4e3] to-[#e6f0ff] min-h-screen text-gray-800">
+            <ToastContainer />
             <Header />
             <main className="container mx-auto p-4 sm:p-6 md:p-8">
                 {renderScreen()}
