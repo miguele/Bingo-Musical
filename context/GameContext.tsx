@@ -1,6 +1,6 @@
 import React, { createContext, useState, useCallback, useMemo, useEffect } from 'react';
-import { ref, onValue, off } from "firebase/database";
 import { database, firebaseConfig } from '../firebaseConfig';
+import { ref, onValue, Unsubscribe } from 'firebase/database';
 import { GameState, GameContextType, User, Player, BingoCard, GameStatus, GameScreen, BingoCell, ToastMessage, StoredGame } from '../types';
 import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET } from '../spotifyConfig';
 import { getGame, saveGame, deleteGame } from '../gameStorage';
@@ -79,7 +79,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // --- Effects ---
 
     useEffect(() => {
-        if (firebaseConfig.apiKey.includes('placeholder')) {
+        if (firebaseConfig.apiKey.includes('placeholder') || !firebaseConfig.apiKey) {
             const errorMessage = "Configuración de Firebase no válida. Reemplaza los valores en firebaseConfig.ts con tus credenciales reales.";
             setState(s => ({...s, firebaseConnectionError: errorMessage}));
             showToast(errorMessage, 'error');
@@ -156,8 +156,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!state.gameCode || state.firebaseConnectionError) return;
 
         const gameRef = ref(database, `games/${state.gameCode}`);
-        const unsubscribe = onValue(gameRef, (snapshot) => {
-            if (snapshot.exists()) {
+        const unsubscribe: Unsubscribe = onValue(gameRef, (snapshot) => {
+            if (snapshot && snapshot.exists()) {
                 const gameData = snapshot.val() as StoredGame;
                 setState(s => ({
                     ...s,
@@ -188,7 +188,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         });
         
-        return () => off(gameRef, 'value', unsubscribe);
+        return () => unsubscribe();
     }, [state.gameCode, state.user?.role, showToast, state.winner, state.firebaseConnectionError]);
 
 

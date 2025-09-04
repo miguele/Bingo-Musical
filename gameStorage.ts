@@ -1,5 +1,5 @@
-import { ref, get, set, remove } from "firebase/database";
 import { database } from './firebaseConfig';
+import { ref, get, set, remove } from 'firebase/database';
 import { StoredGame } from './types';
 
 const GAMES_REF = 'games';

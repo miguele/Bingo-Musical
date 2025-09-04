@@ -1,5 +1,6 @@
 // Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
+// FIX: Use a namespace import for "firebase/app" to resolve issues where named exports are not found.
+import * as firebaseApp from "firebase/app";
 import { getDatabase } from "firebase/database";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
@@ -17,8 +18,9 @@ export const firebaseConfig = {
   measurementId: "G-Y0247HEVHZ"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+// Initialize Firebase, preventing re-initialization in HMR environments.
+// FIX: Use the namespace import to access firebase app functions.
+const app = firebaseApp.getApps().length === 0 ? firebaseApp.initializeApp(firebaseConfig) : firebaseApp.getApps()[0];
 
 // Initialize Realtime Database and get a reference to the service
 export const database = getDatabase(app);
