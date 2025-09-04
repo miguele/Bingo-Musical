@@ -18,7 +18,7 @@ export const getGame = async (gameCode: string): Promise<StoredGame | null> => {
         }
         return null;
     } catch (error) {
-        console.error("Firebase getGame error:", error);
+        console.error("Error técnico en getGame:", error);
         throw new Error("No se pudo conectar con el servidor de partidas.");
     }
 };
@@ -33,7 +33,7 @@ export const saveGame = async (gameCode: string, gameData: StoredGame): Promise<
         const gameRef = ref(database, `${GAMES_REF}/${gameCode}`);
         await set(gameRef, gameData);
     } catch (error) {
-        console.error("Firebase saveGame error:", error);
+        console.error("Error técnico en saveGame:", error);
         throw new Error("No se pudo guardar el estado de la partida.");
     }
 };
@@ -48,7 +48,7 @@ export const deleteGame = async (gameCode: string): Promise<void> => {
         const gameRef = ref(database, `${GAMES_REF}/${gameCode}`);
         await remove(gameRef);
     } catch (error) {
-        console.error("Firebase deleteGame error:", error);
+        console.error("Error técnico en deleteGame:", error);
         throw new Error("No se pudo borrar la partida del servidor.");
     }
 };
