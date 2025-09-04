@@ -1,10 +1,12 @@
-
 import React, { createContext, useState, useCallback, useMemo, useEffect } from 'react';
 import { GameState, GameContextType, User, Player, BingoCard, GameStatus, GameScreen, BingoCell, ToastMessage } from '../types';
+import { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET } from '../spotifyConfig';
 
 // --- LocalStorage Persistence ---
 
 const BINGO_GAMES_STORAGE_KEY = 'bingoGames';
+const SPOTIFY_TOKEN_STORAGE_KEY = 'spotifyAuthToken';
+const SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY = 'spotifyAuthTokenExpiry';
 
 type StoredGame = {
     playlist: string[];
@@ -72,13 +74,86 @@ const initialState: GameState = {
     gameStatus: GameStatus.LOBBY,
     winner: null,
     toasts: [],
+    spotifyAccessToken: null,
+    spotifyTokenExpiresAt: null,
+    isConnectingToSpotify: true,
+    spotifyConnectionError: null,
 };
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [state, setState] = useState<GameState>(initialState);
     
+    const showToast = useCallback((message: string, type: ToastMessage['type'] = 'info') => {
+        const newToast: ToastMessage = { id: Date.now(), message, type };
+        setState(s => ({ ...s, toasts: [...s.toasts, newToast] }));
+    }, []);
+
+    // --- Effects ---
+
+    // Automatic Spotify connection using Client Credentials Flow
     useEffect(() => {
-        // DJ dashboard polling to get live player progress
+        const connectToSpotify = async () => {
+            // Check for existing valid token first
+            const persistedToken = localStorage.getItem(SPOTIFY_TOKEN_STORAGE_KEY);
+            const persistedExpiry = localStorage.getItem(SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY);
+            if (persistedToken && persistedExpiry && Date.now() < parseInt(persistedExpiry, 10)) {
+                setState(s => ({ 
+                    ...s, 
+                    spotifyAccessToken: persistedToken, 
+                    spotifyTokenExpiresAt: parseInt(persistedExpiry, 10),
+                    isConnectingToSpotify: false 
+                }));
+                return;
+            }
+
+            setState(s => ({ ...s, isConnectingToSpotify: true, spotifyConnectionError: null }));
+
+            try {
+                const response = await fetch('https://accounts.spotify.com/api/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Authorization': 'Basic ' + btoa(SPOTIFY_CLIENT_ID + ':' + SPOTIFY_CLIENT_SECRET)
+                    },
+                    body: 'grant_type=client_credentials'
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error_description || 'Fallo al autenticar con Spotify.');
+                }
+
+                const data = await response.json();
+                const expiresAt = Date.now() + data.expires_in * 1000;
+                
+                localStorage.setItem(SPOTIFY_TOKEN_STORAGE_KEY, data.access_token);
+                localStorage.setItem(SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY, expiresAt.toString());
+
+                setState(s => ({
+                    ...s,
+                    spotifyAccessToken: data.access_token,
+                    spotifyTokenExpiresAt: expiresAt,
+                    isConnectingToSpotify: false,
+                }));
+                 showToast('Conectado a Spotify automáticamente.', 'success');
+
+            } catch (error: any) {
+                console.error("Spotify Client Credentials Error:", error);
+                const errorMessage = error.message || 'Error de conexión automática con Spotify.';
+                setState(s => ({
+                    ...s,
+                    isConnectingToSpotify: false,
+                    spotifyConnectionError: errorMessage
+                }));
+                showToast(errorMessage, 'error');
+            }
+        };
+
+        connectToSpotify();
+    }, [showToast]);
+
+    // DJ dashboard polling to get live player progress
+    useEffect(() => {
         if (state.user?.role === 'DJ' && state.currentScreen === GameScreen.DJ_DASHBOARD && state.gameCode) {
             const intervalId = setInterval(() => {
                 const games = getStoredGames();
@@ -102,45 +177,62 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     }, [state.user?.role, state.currentScreen, state.gameCode, state.players, state.gameStatus]);
 
-    const showToast = useCallback((message: string, type: ToastMessage['type'] = 'info') => {
-        const newToast: ToastMessage = { id: Date.now(), message, type };
-        setState(s => ({ ...s, toasts: [...s.toasts, newToast] }));
-    }, []);
+    // --- Context Methods ---
 
     const removeToast = useCallback((id: number) => {
         setState(s => ({ ...s, toasts: s.toasts.filter(toast => toast.id !== id) }));
     }, []);
+    
+    const logoutFromSpotify = useCallback(() => {
+        localStorage.removeItem(SPOTIFY_TOKEN_STORAGE_KEY);
+        localStorage.removeItem(SPOTIFY_TOKEN_EXPIRY_STORAGE_KEY);
+        setState(s => ({ 
+            ...s, 
+            spotifyAccessToken: null, 
+            spotifyTokenExpiresAt: null,
+            // Trigger reconnection on next attempt
+            isConnectingToSpotify: true, 
+            spotifyConnectionError: null 
+        }));
+        showToast('Se ha cerrado la sesión de Spotify. Recarga para reconectar.', 'info');
+    }, [showToast]);
 
     const login = useCallback((name: string, role: 'DJ' | 'Player') => {
         setState(s => ({ ...s, user: { name, role }, currentScreen: GameScreen.HOME }));
     }, []);
 
     const logout = useCallback(() => {
-        // If DJ logs out, remove their created game to avoid orphaned games
         if (state.user?.role === 'DJ' && state.gameCode) {
             const games = getStoredGames();
             delete games[state.gameCode];
             saveStoredGames(games);
         }
-        setState(initialState);
+        setState(s => ({ 
+            ...initialState, 
+            spotifyAccessToken: s.spotifyAccessToken,
+            spotifyTokenExpiresAt: s.spotifyTokenExpiresAt,
+            isConnectingToSpotify: s.isConnectingToSpotify,
+            spotifyConnectionError: s.spotifyConnectionError,
+        }));
     }, [state.user, state.gameCode]);
 
     const resetGame = useCallback(() => {
-        // Remove the game from persistent storage
         if (state.gameCode) {
             const games = getStoredGames();
             delete games[state.gameCode];
             saveStoredGames(games);
         }
         
-        // Reset local state, keeping user logged in
         setState(s => ({
             ...initialState,
             user: s.user,
             currentScreen: s.user ? GameScreen.HOME : GameScreen.LOGIN,
+            spotifyAccessToken: s.spotifyAccessToken,
+            spotifyTokenExpiresAt: s.spotifyTokenExpiresAt,
+            isConnectingToSpotify: s.isConnectingToSpotify,
+            spotifyConnectionError: s.spotifyConnectionError,
         }));
     }, [state.gameCode]);
-
 
     const setCurrentScreen = useCallback((screen: GameScreen) => {
         setState(s => ({ ...s, currentScreen: screen }));
@@ -149,7 +241,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const createGame = useCallback((songs: string[]) => {
         const games = getStoredGames();
         let gameCode;
-        // Ensure game code is unique (highly unlikely collision, but good practice)
         do {
             gameCode = Math.random().toString(36).substring(2, 8).toUpperCase();
         } while (games[gameCode]);
@@ -178,7 +269,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const gameData = games[gameCode];
 
         if (gameData && state.user) {
-            // If game is already finished, don't allow joining
             if (gameData.gameStatus === GameStatus.FINISHED) {
                 showToast('Esta partida ya ha terminado.', 'error');
                 return false;
@@ -186,7 +276,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             const playerExists = gameData.players.some(p => p.name === state.user?.name);
             
-            // Allow existing players to rejoin
             if (playerExists) {
                 setState(s => ({
                     ...s,
@@ -200,12 +289,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return true;
             }
 
-            // Add new player to the game
             const card = generateBingoCard(gameData.playlist);
             const newPlayer: Player = {
                 name: state.user.name,
                 card: card,
-                markedCount: 1 // Free space
+                markedCount: 1 
             };
             
             gameData.players.push(newPlayer);
@@ -234,12 +322,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const playerIndex = s.players.findIndex(p => p.name === s.user?.name);
             if (playerIndex === -1) return s;
 
-            // Deep copy to avoid mutation issues
             const newPlayers = JSON.parse(JSON.stringify(s.players));
             const player = newPlayers[playerIndex];
             
             if (player.card[rowIndex][colIndex].marked) {
-                return s; // Already marked, no change
+                return s; 
             }
             
             player.card[rowIndex][colIndex].marked = true;
@@ -250,7 +337,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }));
             player.markedCount = markedCount;
             
-            // Persist change to localStorage
             const games = getStoredGames();
             const gameData = games[s.gameCode];
             let isWinner = false;
@@ -288,8 +374,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         markCell,
         resetGame,
         showToast,
-        removeToast
-    }), [state, login, logout, setCurrentScreen, createGame, joinGame, markCell, resetGame, showToast, removeToast]);
+        removeToast,
+        logoutFromSpotify,
+    }), [state, login, logout, setCurrentScreen, createGame, joinGame, markCell, resetGame, showToast, removeToast, logoutFromSpotify]);
 
     return (
         <GameContext.Provider value={contextValue}>

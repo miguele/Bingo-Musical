@@ -6,7 +6,7 @@ import Input from '../Input';
 import { GameScreen } from '../../types';
 import MusicNoteIcon from '../icons/MusicNoteIcon';
 import AlertTriangleIcon from '../icons/AlertTriangleIcon';
-import { SPOTIFY_ACCESS_TOKEN } from '../../config';
+import SpotifyIcon from '../icons/SpotifyIcon';
 
 // --- Spotify API Helper Functions ---
 const SPOTIFY_API_BASE_URL = 'https://api.spotify.com/v1';
@@ -35,10 +35,10 @@ const fetchAllTracks = async (playlistId: string, token: string): Promise<any[]>
 
         if (!response.ok) {
              if (response.status === 401) {
-                throw new Error('El token de Spotify no es válido o ha expirado. Por favor, genera uno nuevo y actualiza el fichero config.ts.');
+                throw new Error('El token de Spotify no es válido o ha expirado. Por favor, recarga la página para obtener uno nuevo.');
             }
             if (response.status === 404) {
-                throw new Error('Playlist no encontrada. Asegúrate de que el enlace es correcto y la playlist es pública o colaborativa.');
+                throw new Error('Playlist no encontrada. Asegúrate de que el enlace es correcto y la playlist es pública.');
             }
             throw new Error('No se pudo obtener la información de la playlist.');
         }
@@ -51,56 +51,29 @@ const fetchAllTracks = async (playlistId: string, token: string): Promise<any[]>
 };
 
 
-// --- Components ---
-
-const SpotifySetupGuide: React.FC = () => (
-    <div className="flex justify-center items-center pt-8 md:pt-16">
-        <Card className="w-full max-w-2xl">
-            <div className="text-center">
-                <h2 className="text-3xl font-bold text-gray-800 mb-2">Configuración Requerida</h2>
-                <p className="text-gray-600 mb-6">Para conectar con Spotify, primero necesitas configurar tu token de acceso.</p>
-            </div>
-            <div className="space-y-4 text-left bg-blue-50/50 p-6 rounded-lg border border-blue-200">
-                <h3 className="text-lg font-bold text-gray-700">Sigue estos pasos:</h3>
-                <ol className="list-decimal list-inside space-y-3 text-gray-600">
-                    <li>
-                        Ve a la consola de Spotify para desarrolladores y obtén un token.
-                        <a href="https://developer.spotify.com/console/get-playlist-tracks/" target="_blank" rel="noopener noreferrer" className="ml-2 inline-block bg-green-500 text-white px-3 py-1 rounded-md text-sm font-semibold hover:bg-green-600 transition-colors">
-                            Obtener Token &rarr;
-                        </a>
-                    </li>
-                    <li>En esa página, haz clic en el botón verde <strong>"GET TOKEN"</strong>. Acepta los permisos que te pida.</li>
-                    <li>Copia el token de acceso (largo) que aparece.</li>
-                    <li>
-                        Abre el fichero <code className="bg-gray-200 text-sm p-1 rounded-md">config.ts</code> en tu editor de código.
-                    </li>
-                    <li>
-                        Pega tu token para reemplazar el texto de ejemplo:
-                        <code className="block bg-gray-200 text-sm p-3 rounded-md mt-2 overflow-x-auto">
-                           export const SPOTIFY_ACCESS_TOKEN = 'AQUÍ_VA_TU_TOKEN';
-                        </code>
-                    </li>
-                </ol>
-                <p className="text-sm text-gray-500 pt-2">Una vez guardes el cambio, esta pantalla se actualizará automáticamente.</p>
-            </div>
-        </Card>
-    </div>
-);
-
-
+// --- Main Screen Component ---
 const CreateGameScreen: React.FC = () => {
     const [playlistUrl, setPlaylistUrl] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [loadedSongs, setLoadedSongs] = useState<string[]>([]);
     const [error, setError] = useState('');
-    const { createGame, setCurrentScreen } = useGame();
+    const { 
+        createGame, 
+        setCurrentScreen, 
+        spotifyAccessToken,
+        isConnectingToSpotify,
+        spotifyConnectionError,
+        logoutFromSpotify,
+    } = useGame();
     
-    // Check if the token is provided in the config file.
-    const isConfigured = SPOTIFY_ACCESS_TOKEN && !SPOTIFY_ACCESS_TOKEN.includes('TU_TOKEN_DE_SPOTIFY_VA_AQUI');
-
     const handleLoadPlaylist = async () => {
         setError('');
         setLoadedSongs([]);
+
+        if (!spotifyAccessToken) {
+            setError('No se pudo conectar con Spotify. Intenta recargar la página.');
+            return;
+        }
         
         const playlistId = extractPlaylistId(playlistUrl);
         if (!playlistId) {
@@ -111,7 +84,7 @@ const CreateGameScreen: React.FC = () => {
         setIsLoading(true);
 
         try {
-            const tracks = await fetchAllTracks(playlistId, SPOTIFY_ACCESS_TOKEN);
+            const tracks = await fetchAllTracks(playlistId, spotifyAccessToken);
             const formattedSongs = tracks.map(item => 
                 `${item.track.name} - ${item.track.artists.map((a: any) => a.name).join(', ')}`
             );
@@ -125,6 +98,9 @@ const CreateGameScreen: React.FC = () => {
 
         } catch (e: any) {
              setError(e.message || 'Ocurrió un error desconocido al cargar la playlist.');
+             if (e.message.includes('token')) {
+                 logoutFromSpotify();
+             }
         } finally {
             setIsLoading(false);
         }
@@ -137,17 +113,56 @@ const CreateGameScreen: React.FC = () => {
         }
     };
 
-    if (!isConfigured) {
-        return <SpotifySetupGuide />;
-    }
+    const renderContent = () => {
+        if (isConnectingToSpotify) {
+            return (
+                <div className="text-center p-8">
+                    <SpotifyIcon className="w-16 h-16 text-[#1DB954] mx-auto animate-pulse" />
+                    <p className="mt-4 text-lg font-semibold text-gray-700">Conectando con Spotify...</p>
+                </div>
+            );
+        }
 
-    return (
-        <div className="flex justify-center items-center pt-8 md:pt-16">
-            <Card className="w-full max-w-2xl">
+        if (spotifyConnectionError) {
+             return (
+                <div className="text-center p-8">
+                    <AlertTriangleIcon className="w-16 h-16 text-red-500 mx-auto" />
+                    <h2 className="mt-4 text-2xl font-bold text-gray-800">Error de Conexión</h2>
+                    <p className="mt-2 text-gray-600">{spotifyConnectionError}</p>
+                     <p className="mt-2 text-sm text-gray-500">
+                        Asegúrate de que las credenciales son correctas y recarga la página.
+                    </p>
+                    <div className="mt-6">
+                        <Button type="button" variant="secondary" onClick={() => setCurrentScreen(GameScreen.HOME)}>
+                            Volver
+                        </Button>
+                    </div>
+                </div>
+            );
+        }
+
+        if (!spotifyAccessToken) {
+             return (
+                 <div className="text-center p-8">
+                    <AlertTriangleIcon className="w-16 h-16 text-red-500 mx-auto" />
+                    <h2 className="mt-4 text-2xl font-bold text-gray-800">No se pudo conectar</h2>
+                     <p className="mt-2 text-gray-600">No se ha podido obtener el token de Spotify. Por favor, recarga la página.</p>
+                     <div className="mt-6">
+                        <Button type="button" variant="secondary" onClick={() => setCurrentScreen(GameScreen.HOME)}>
+                            Volver
+                        </Button>
+                    </div>
+                </div>
+             )
+        }
+
+        return (
+            <>
                 <div className="text-center">
-                    <h2 className="text-3xl font-bold text-gray-800 mb-2">Crear Nueva Partida</h2>
+                    <SpotifyIcon className="w-12 h-12 text-[#1DB954] mx-auto mb-4" />
+                    <h2 className="text-3xl font-bold text-gray-800 mb-2">Cargar Playlist</h2>
                     <p className="text-gray-600 mb-8">
-                        Pega el enlace de tu playlist de Spotify para generar los cartones.
+                        Conexión automática exitosa. Pega el enlace de tu playlist de Spotify.
                     </p>
                 </div>
                 
@@ -213,6 +228,14 @@ const CreateGameScreen: React.FC = () => {
                         </Button>
                     </div>
                 </form>
+            </>
+        );
+    }
+
+    return (
+        <div className="flex justify-center items-center pt-8 md:pt-16">
+            <Card className="w-full max-w-2xl">
+                {renderContent()}
             </Card>
         </div>
     );

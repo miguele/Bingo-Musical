@@ -1,4 +1,3 @@
-
 export interface User {
     name: string;
     role: 'DJ' | 'Player';
@@ -47,6 +46,10 @@ export interface GameState {
     gameStatus: GameStatus;
     winner: Player | null;
     toasts: ToastMessage[];
+    spotifyAccessToken: string | null;
+    spotifyTokenExpiresAt: number | null;
+    isConnectingToSpotify: boolean;
+    spotifyConnectionError: string | null;
 }
 
 export interface GameContextType extends GameState {
@@ -59,4 +62,5 @@ export interface GameContextType extends GameState {
     resetGame: () => void;
     showToast: (message: string, type?: ToastMessage['type']) => void;
     removeToast: (id: number) => void;
+    logoutFromSpotify: () => void;
 }
